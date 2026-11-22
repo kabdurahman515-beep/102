@@ -1,0 +1,34 @@
+name: Extract approved UDA backend source
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/extract-approved-backend.yml
+permissions:
+  contents: write
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Extract backend source archive
+        run: |
+          test -s Universal_Device_Agent_Backend_Approval_BUILD_FIXED.zip
+          mkdir -p /tmp/uda-backend
+          unzip -q Universal_Device_Agent_Backend_Approval_BUILD_FIXED.zip -d /tmp/uda-backend
+          test -s /tmp/uda-backend/bin/server.dart
+          test -s /tmp/uda-backend/lib/routes/devices.dart
+          test -s /tmp/uda-backend/lib/routes/admin.dart
+          cp -a /tmp/uda-backend/. .
+      - name: Commit extracted source
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Backend source already matches archive; no commit required."
+          else
+            git commit -m "Deploy website-approved device registration backend"
+            git push
+          fi
