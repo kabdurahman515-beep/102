@@ -362,7 +362,7 @@ Router connectorRoutes(AppState state) {
     }
     final String? accessToken;
     try {
-      accessToken = await state.getValidAccessToken(deviceId, connectorName, provider);
+      accessToken = await state.getValidAccessToken(deviceId, connectorName, provider!);
     } on StateError catch (e) {
       return ApiError.internal('$connectorName token refresh fail hua: ${e.message}');
     }
