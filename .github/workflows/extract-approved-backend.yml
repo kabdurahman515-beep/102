@@ -3,7 +3,7 @@ on:
   push:
     branches: [main]
     paths:
-      - .github/workflows/extract-approved-backend.yml
+      - BACKEND_SOURCE_EXTRACT_TRIGGER.txt
 permissions:
   contents: write
 jobs:
