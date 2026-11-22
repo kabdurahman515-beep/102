@@ -73,7 +73,7 @@ class SlidingWindowLimiter {
 
 /// Request se ek stable "identity" nikalta hai rate-limiting ke liye —
 /// priority order: authenticated API key > authenticated device > IP
-/// address (unauthenticated requests, jaise `/devices/pair`, ke liye
+/// address (unauthenticated requests, jaise `/devices/register`, ke liye
 /// fallback).
 /// Item 17: client IP. Proxy ke peeche (`trustProxy == true`) asli client
 /// `X-Forwarded-For` ka **pehla** entry hota hai; warna socket ka
@@ -155,9 +155,15 @@ Middleware rateLimitMiddleware({bool trustProxy = false}) {
     return (Request request) async {
       final identity = identityFor(request, trustProxy: trustProxy);
 
-      if (request.method == 'POST' &&
-          (request.requestedUri.path == '/devices/pair' ||
-              request.requestedUri.path == '/pairing-codes')) {
+      final pairingPath = request.requestedUri.path;
+      final isPairingRequest =
+          (request.method == 'POST' &&
+              (pairingPath == '/devices/pair' ||
+                  pairingPath == '/pairing-codes' ||
+                  pairingPath == '/devices/register')) ||
+          (request.method == 'GET' &&
+              pairingPath.startsWith('/devices/registration/'));
+      if (isPairingRequest) {
         final pairRetry = pairLimiter.checkAndIncrement(identity);
         if (pairRetry != null) {
           return ApiError.rateLimited(

@@ -30,7 +30,10 @@ Middleware deviceAuthMiddleware(AppState state) {
 
       // Item 21/22: constant-time lookup, expired keys reject.
       final key = state.apiKeyBySecret(token);
-      if (key != null) {
+      final keyDevice = key == null ? null : state.devices[key.deviceId];
+      final keyDeviceExpired = keyDevice == null ||
+          (keyDevice.expiresAt != null && !keyDevice.expiresAt!.isAfter(DateTime.now().toUtc()));
+      if (key != null && !keyDeviceExpired) {
         key.lastUsedAt = DateTime.now().toUtc();
         return innerHandler(request.change(context: {'apiKey': key}));
       }

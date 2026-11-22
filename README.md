@@ -15,7 +15,9 @@ dashboard/AI clients ko real-time events dena.
 ```
 Dashboard/AI client                Control API (yeh server)              Device (shared_app)
        |                                    |                                    |
-       |--- POST /devices/pair ------------>|                                    |
+       |--- POST /devices/register -------->|                                    |
+       |<-- registration + poll secret --|                                    |
+       |<-- website approval + token ---|                                    |
        |<-- {device_id, bearer_token} ------|                                    |
        |                                    |<--- WS /devices/{id}/agent --------|  (persistent,
        |                                    |         (device khud connect karta hai)  AgentConnection)
@@ -66,7 +68,12 @@ control_api/
 
 | Method | Path | Auth | Kaam |
 |---|---|---|---|
-| POST | `/devices/pair` | none | Device register karta hai, bearer token deta hai |
+| POST | `/devices/register` | none | Pending owner-approval request banata hai |
+| GET | `/devices/registration/{id}` | polling secret | Approval status; approved hone par bearer token |
+| GET | `/admin/pending-devices` | ADMIN_TOKEN | Pending approval queue |
+| POST | `/admin/pending-devices/{id}/approve` | ADMIN_TOKEN | Hours/days/months/permanent access approve |
+| POST | `/admin/pending-devices/{id}/reject` | ADMIN_TOKEN | Request reject |
+| POST | `/admin/devices/{id}/revoke` | ADMIN_TOKEN | Device access revoke |
 | GET | `/capabilities` | none | Sab registered capabilities |
 | GET | `/capabilities/{name}/schema` | none | Ek capability ka schema |
 | POST | `/capabilities/register` | none | Custom capability add |
@@ -147,11 +154,8 @@ na hone ki wajah se, jaisa upar bhi likha hai):
    devices) ke liye kaafi hai aur koi native dependency nahi chahiye
    (Docker build simple rehta hai).
 
-2. **Pairing code validation nahi hai** — `POST /devices/pair` abhi
-   `pairing_code` ko validate nahi karta (trust-on-first-use). Production
-   mein pairing code ek short-lived server-side store mein match hona
-   chahiye (jo native `PairingManager` generate karta hai, usay server ko
-   bhi pata hona chahiye — abhi woh do islands hain, connect nahi).
+2. **Device approval** — new installs must use the website approval workflow. Legacy `/devices/pair` and `/pairing-codes` return HTTP 410. Existing persisted devices without `expires_at` remain permanent.
+
 
 3. **Connector OAuth** — `POST /connectors/{name}/auth` sirf ek stub hai.
    Real Google Drive/Slack/waghera OAuth flow connector-specific hota hai,

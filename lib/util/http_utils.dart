@@ -3,7 +3,6 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:shelf/shelf.dart';
 
@@ -137,7 +136,7 @@ Middleware bodySizeLimitMiddleware(int maxBytes) {
       }
       var seen = 0;
       final limited = request.read().transform(
-        StreamTransformer<Uint8List, List<int>>.fromHandlers(
+        StreamTransformer<List<int>, List<int>>.fromHandlers(
           handleData: (chunk, sink) {
             seen += chunk.length;
             if (seen > maxBytes) {

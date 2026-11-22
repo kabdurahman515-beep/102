@@ -16,7 +16,6 @@ import 'package:control_api/routes/capabilities.dart';
 import 'package:control_api/routes/commands.dart';
 import 'package:control_api/routes/connectors.dart';
 import 'package:control_api/routes/devices.dart';
-import 'package:control_api/auth/pairing_code_registry.dart';
 import 'package:control_api/routes/owner.dart';
 import 'package:control_api/storage/app_state.dart';
 import 'package:control_api/storage/persistence.dart';
@@ -27,13 +26,6 @@ import 'package:control_api/websocket/handlers.dart';
 
 void main(List<String> args) async {
   final state = AppState();
-  // Item 10: pairing code TTL (default 300s, 60..3600 ke beech clamp).
-  final ttlSeconds =
-      (int.tryParse(Platform.environment['PAIRING_CODE_TTL_SECONDS'] ?? '') ?? 300)
-          .clamp(60, 3600)
-          .toInt();
-  state.pairingCodes = PairingCodeRegistry(ttl: Duration(seconds: ttlSeconds));
-
   // Item 4/17: TLS-proxy signal pehle hi nikal lete hain — rate limiter
   // ko bhi chahiye (X-Forwarded-For trust karne ke liye), aur bind
   // decision ko bhi. Railway apne edge par hamesha TLS terminate karta
@@ -96,6 +88,7 @@ void main(List<String> args) async {
   // session/screen sockets ko dobara validate (expired API key etc.).
   Timer.periodic(const Duration(seconds: 30), (_) {
     state.sweepStaleDevices();
+    state.sweepExpiredDevices();
     state.revalidateListeners();
   });
 
@@ -341,15 +334,6 @@ void _warnAboutMissingConfig() {
   if ((env['CONNECTOR_REDIRECT_BASE_URL'] ?? '').isEmpty) {
     warn('CONNECTOR_REDIRECT_BASE_URL set nahi hai — OAuth callback URL '
         'sahi nahi banega.');
-  }
-  if ((env['PAIRING_SECRET'] ?? '').isEmpty) {
-    warn('PAIRING_SECRET set nahi hai — POST /devices/pair koi bhi '
-        '(rate-limit ke andar) call kar sakta hai. Production mein set karein.');
-  }
-  if ((env['REQUIRE_PAIRING_CODE'] ?? '').toLowerCase() == 'true' &&
-      (env['ADMIN_SECRET'] ?? '').length < 16) {
-    warn('REQUIRE_PAIRING_CODE=true hai lekin ADMIN_SECRET (min 16 chars) '
-        'set nahi — pehla device pair karne ka koi tareeqa nahi bachega.');
   }
   final dataDir = env['DATA_DIR'] ?? '';
   if (dataDir.isEmpty) {

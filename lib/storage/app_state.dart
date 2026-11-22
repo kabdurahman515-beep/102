@@ -3,7 +3,6 @@ import 'dart:convert';
 
 import 'package:web_socket_channel/web_socket_channel.dart';
 
-import '../auth/pairing_code_registry.dart';
 import '../models/activity.dart';
 import '../models/api_key.dart';
 import '../models/device.dart';
@@ -28,6 +27,9 @@ class DuplicateRequestException implements Exception {
 
 class AppState {
   final VersionedMap<Device> devices = VersionedMap<Device>();
+  /// Pending owner-approval registrations keyed by opaque registration id.
+  /// Values contain only hashes of polling secrets, never plaintext secrets.
+  final Map<String, Map<String, dynamic>> pendingRegistrations = {};
   final VersionedMap<ApiKeyRecord> apiKeys =
       VersionedMap<ApiKeyRecord>(); // keyId -> record
 
@@ -41,9 +43,6 @@ class AppState {
   final Map<String, String> _apiKeyIndex = {};
   int _apiKeyIndexVersion = -1;
   final List<ActivityEvent> activityLog = [];
-
-  /// Item 10: server-issued one-time pairing codes (memory-only).
-  PairingCodeRegistry pairingCodes = PairingCodeRegistry();
 
   /// P1-01 — persistent, validated custom capability registrations
   /// (`POST /capabilities/register`). Pehle yeh ek route-local, non-
@@ -208,6 +207,14 @@ class AppState {
 
   /// Item 21: device ko aur uske saare data ko hata do (unpair).
   /// Returns `false` agar device exist hi nahi karta.
+  Future<void> sweepExpiredDevices() async {
+    final now = DateTime.now().toUtc();
+    final expired = devices.values
+        .where((d) => d.expiresAt != null && !d.expiresAt!.isAfter(now))
+        .map((d) => d.id).toList();
+    for (final id in expired) { await removeDevice(id); }
+  }
+
   Future<bool> removeDevice(String deviceId) async {
     if (devices.remove(deviceId) == null) return false;
     apiKeys.removeWhere((_, k) => k.deviceId == deviceId);
@@ -389,7 +396,8 @@ class AppState {
     final d = id == null ? null : devices[id];
     // Index-hit ko hamesha current record ke against re-verify karo
     // (stale entry / in-place token rotation ke khilaf).
-    if (d != null && constantTimeEquals(d.bearerTokenHash, incomingHash)) {
+    if (d != null && constantTimeEquals(d.bearerTokenHash, incomingHash) &&
+        (d.expiresAt == null || d.expiresAt!.isAfter(DateTime.now().toUtc()))) {
       return d;
     }
     return null;

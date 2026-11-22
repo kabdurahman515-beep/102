@@ -1,6 +1,6 @@
 import '../util/crypto_utils.dart';
 
-/// Ek paired device — `POST /devices/pair` ke through banta hai.
+/// Ek paired device — `POST /devices/register` ke through banta hai.
 /// Bearer token isi device ki saari future requests (key creation,
 /// status, waghera) authenticate karta hai — Dart client ka
 /// `DeviceAgentApiClient.setBearerToken()` isi ke liye already defined
@@ -11,7 +11,7 @@ import '../util/crypto_utils.dart';
 /// secret se bilkul alag treatment, jabke security-wise dono equally
 /// sensitive hain. Ab sirf `bearerTokenHash` store hota hai
 /// (`util/crypto_utils.dart`'s `hashSecretUtil`, wahi jo `ApiKeyRecord`
-/// use karta hai) — plaintext token sirf `POST /devices/pair` ke
+/// use karta hai) — plaintext token sirf `POST /devices/register` ke
 /// response mein, ek hi baar, wapas jaata hai.
 class Device {
   final String id;
@@ -20,7 +20,7 @@ class Device {
   String bearerTokenHash;
 
   /// P1-02 — device ka OS platform: `android` | `windows` | `linux`.
-  /// Pairing ke waqt client khud batata hai (`POST /devices/pair`'s
+  /// Pairing ke waqt client khud batata hai (`POST /devices/register`'s
   /// `platform` field). AI Tool Registry (`ai_tools/ai_tool_registry.dart`)
   /// isi se decide karta hai ke kaunsi capabilities is device par
   /// support hi nahi hain (jaise `contacts` sirf Android par).
@@ -36,6 +36,8 @@ class Device {
 
   final DateTime pairedAt;
   DateTime lastSeenAt;
+  /// Null means grandfathered/permanent access; non-null is enforced server-side.
+  DateTime? expiresAt;
 
   // Section 9.2 state machine — background agent isko update karta rahega.
   String state; // ONLINE_UNLOCKED | ONLINE_LOCKED | SCREEN_OFF | SLEEPING | OFFLINE | POWERED_OFF
@@ -52,6 +54,7 @@ class Device {
     this.platform = 'unknown',
     required this.pairedAt,
     required this.lastSeenAt,
+    this.expiresAt,
     this.state = 'OFFLINE',
     this.backgroundActive = false,
     this.batteryPercent,
@@ -63,6 +66,7 @@ class Device {
         'device_id': id,
         'state': state,
         'platform': platform,
+        if (expiresAt != null) 'expires_at': expiresAt!.toUtc().toIso8601String(),
         'background_active': backgroundActive,
         'battery_percent': batteryPercent,
         if (lastLocation != null) 'location': lastLocation,

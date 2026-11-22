@@ -107,6 +107,7 @@ class Persistence {
         platform: m['platform'] as String? ?? 'unknown',
         pairedAt: DateTime.parse(m['paired_at'] as String),
         lastSeenAt: DateTime.parse(m['last_seen_at'] as String),
+        expiresAt: m['expires_at'] == null ? null : DateTime.parse(m['expires_at'] as String),
         state: m['state'] as String? ?? 'OFFLINE',
         backgroundActive: m['background_active'] as bool? ?? false,
         batteryPercent: m['battery_percent'] as int?,
@@ -114,6 +115,10 @@ class Persistence {
         lastNetwork: m['last_network'] as Map<String, dynamic>?,
       );
     });
+
+    for (final item in (json['pending_registrations'] as List<dynamic>? ?? const [])) {
+      try { final m = item as Map<String, dynamic>; final id = m['id'] as String; state.pendingRegistrations[id] = Map<String, dynamic>.from(m); } catch (_) {}
+    }
 
     each('api_keys', (m) {
       state.apiKeys[m['key_id'] as String] = ApiKeyRecord(
@@ -252,6 +257,7 @@ class Persistence {
                   'platform': d.platform,
                   'paired_at': d.pairedAt.toIso8601String(),
                   'last_seen_at': d.lastSeenAt.toIso8601String(),
+                  if (d.expiresAt != null) 'expires_at': d.expiresAt!.toUtc().toIso8601String(),
                   'state': d.state,
                   'background_active': d.backgroundActive,
                   'battery_percent': d.batteryPercent,
@@ -259,6 +265,7 @@ class Persistence {
                   'last_network': d.lastNetwork,
                 })
             .toList(),
+        'pending_registrations': state.pendingRegistrations.values.toList(),
         'api_keys': state.apiKeys.values
             .map((k) => {
                   'key_id': k.keyId,

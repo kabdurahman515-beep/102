@@ -1,12 +1,10 @@
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:shelf/shelf.dart';
 import 'package:shelf_router/shelf_router.dart';
 
 import '../ai_tools/ai_tool_registry.dart';
 import '../auth/device_auth.dart';
-import '../auth/pairing_code_registry.dart';
 import '../models/activity.dart';
 import '../models/api_key.dart';
 import '../models/errors.dart';
@@ -15,168 +13,76 @@ import '../storage/app_state.dart';
 import '../util/crypto_utils.dart';
 import '../util/http_utils.dart';
 
-/// Item 10: server par total paired devices ki upper limit (fake-device
-/// flood se bachav). `MAX_DEVICES` env var se override ho sakta hai.
-int _maxDevices() =>
-    int.tryParse(Platform.environment['MAX_DEVICES'] ?? '') ?? 500;
-
-/// Item 10: `ADMIN_SECRET` kam-se-kam itna lamba ho, warna feature off.
-const _minAdminSecretLength = 16;
-
-Router deviceRoutes(AppState state, {Map<String, String>? env}) {
+Router deviceRoutes(AppState state) {
   final router = Router();
-  final environment = env ?? Platform.environment;
-  bool requireCode() =>
-      (environment['REQUIRE_PAIRING_CODE'] ?? '').toLowerCase() == 'true';
+
+  // Website-approved registration. Pending requests expire after 24h; this is
+  // deliberately separate from the approved device credential lifetime.
+  router.post('/devices/register', (Request request) async {
+    final parsed = await readJsonObject(request);
+    if (!parsed.isOk) return parsed.error!;
+    final body = parsed.body!;
+    final name = (body['device_name'] as String? ?? '').trim();
+    final platform = body['platform'];
+    if (name.isEmpty || name.length > 100) return ApiError.invalidRequest('Device name required (1-100 chars)');
+    if (platform is! String || !{'android','windows','linux'}.contains(platform)) return ApiError.invalidRequest('Invalid platform');
+    final now = DateTime.now().toUtc();
+    state.pendingRegistrations.removeWhere((_, item) {
+      final terminal = item['status'] != 'pending';
+      final created = DateTime.tryParse(item['created_at'] as String? ?? '');
+      return terminal && created != null && created.isBefore(now.subtract(const Duration(days: 7)));
+    });
+    final pendingCount = state.pendingRegistrations.values.where((item) => item['status'] == 'pending').length;
+    if (pendingCount >= 500) return ApiError.rateLimited('Too many pending registrations');
+    final id = 'reg_${randomHex(16)}';
+    final pollSecret = randomHex(32);
+    state.pendingRegistrations[id] = {
+      'id': id, 'name': name, 'platform': platform,
+      'created_at': now.toIso8601String(),
+      'request_expires_at': now.add(const Duration(hours: 24)).toIso8601String(),
+      'poll_secret_hash': hashSecretUtil(pollSecret), 'status': 'pending',
+    };
+    await state.persist();
+    return Response(202, body: jsonEncode({'registration_id': id, 'poll_secret': pollSecret, 'status': 'pending', 'poll_interval_seconds': 5}), headers: {'content-type':'application/json','cache-control':'no-store'});
+  });
+
+  router.get('/devices/registration/<id>', (Request request, String id) async {
+    final item = state.pendingRegistrations[id];
+    if (item == null) return ApiError.notFound('Registration not found');
+    final supplied = request.headers['authorization']?.replaceFirst(RegExp(r'^Bearer\s+', caseSensitive:false), '') ?? request.url.queryParameters['secret'] ?? '';
+    if (!constantTimeEquals(hashSecretUtil(supplied), item['poll_secret_hash'] as String)) return unauthorized('Registration polling credential invalid');
+    final now = DateTime.now().toUtc();
+    if (DateTime.parse(item['request_expires_at'] as String).isBefore(now) && item['status'] == 'pending') {
+      item['status'] = 'expired'; await state.persist();
+    }
+    if (item['status'] == 'approved' || item['status'] == 'claimed') {
+      final existingId = item['device_id'] as String?;
+      Device? device = existingId == null ? null : state.devices[existingId];
+      String token = Device.generateToken();
+      if (device == null) {
+        var deviceId = Device.generateId(); while (state.devices.containsKey(deviceId)) { deviceId = Device.generateId(); }
+        device = Device(id: deviceId, name: item['name'] as String, platform: item['platform'] as String, bearerTokenHash: hashSecretUtil(token), pairedAt: now, lastSeenAt: now, expiresAt: item['access_expires_at'] == null ? null : DateTime.parse(item['access_expires_at'] as String));
+        state.devices[deviceId] = device; item['device_id'] = deviceId;
+      } else {
+        device.bearerTokenHash = hashSecretUtil(token); state.devices.touch(); state.revalidateListeners();
+      }
+      item['status'] = 'claimed'; await state.persist();
+      return Response.ok(jsonEncode({'status':'approved','device_id':device.id,'bearer_token':token,'expires_at':device.expiresAt?.toIso8601String()}), headers:{'content-type':'application/json','cache-control':'no-store'});
+    }
+    return Response.ok(jsonEncode({'status': item['status']}), headers:{'content-type':'application/json','cache-control':'no-store'});
+  });
 
   // POST /pairing-codes — owner ek-baar-use, chhota-umr pairing code
   // issue karta hai. Auth: (a) pehle se paired device ka bearer token, ya
   // (b) `Authorization: Bearer <ADMIN_SECRET>` (pehla device bootstrap
   // karne ke liye). Response mein code sirf isi baar milta hai.
   router.post('/pairing-codes', (Request request) async {
-    String? issuedBy;
-    final device = request.context['device'];
-    if (device is Device) {
-      issuedBy = 'device:${device.id}';
-    } else {
-      final header = request.headers['authorization'] ?? '';
-      final bearer = header.toLowerCase().startsWith('bearer ')
-          ? header.substring('Bearer '.length).trim()
-          : '';
-      // The website authenticates with ADMIN_TOKEN. Accept it here as the
-      // owner credential for issuing short-lived pairing codes. Keep the
-      // legacy ADMIN_SECRET bootstrap path for existing deployments.
-      final adminToken = environment['ADMIN_TOKEN'] ?? '';
-      final adminSecret = environment['ADMIN_SECRET'] ?? '';
-      final tokenMatches = adminToken.length >= 32 &&
-          bearer.isNotEmpty &&
-          constantTimeEquals(bearer, adminToken);
-      final secretMatches = adminSecret.length >= _minAdminSecretLength &&
-          bearer.isNotEmpty &&
-          constantTimeEquals(bearer, adminSecret);
-      if (tokenMatches || secretMatches) {
-        issuedBy = 'admin';
-      }
-    }
-    if (issuedBy == null) {
-      return unauthorized(
-          'Paired device token ya owner admin credential (ADMIN_TOKEN/ADMIN_SECRET) chahiye');
-    }
-    final issued = state.pairingCodes.issue(issuedBy: issuedBy);
-    if (issued == null) {
-      return ApiError.rateLimited(
-          'Bahut zyada active pairing codes hain — kuch der baad try karein',
-          retryAfterSeconds: state.pairingCodes.ttl.inSeconds);
-    }
-    return Response.ok(
-      jsonEncode({
-        'pairing_code': issued.code,
-        'expires_at': issued.expiresAt.toIso8601String(),
-        'expires_in_seconds': state.pairingCodes.ttl.inSeconds,
-        'single_use': true,
-      }),
-      headers: {'content-type': 'application/json'},
-    );
+    return Response(410, body: jsonEncode({'error':'owner_approval_required','message':'Pairing codes have been replaced by website approval.'}), headers: {'content-type':'application/json'});
   });
 
-  // POST /devices/pair {pairing_code, device_name, platform, [pairing_secret]}
-  //
-  // Item 10 hardening: pehle yeh endpoint bilkul open tha. Ab:
-  //  * strict per-IP rate limit (`middleware/rate_limiter.dart`),
-  //  * total device cap (`MAX_DEVICES`, default 500),
-  //  * agar server par `PAIRING_SECRET` env set hai to body mein wahi
-  //    `pairing_secret` chahiye (constant-time compare),
-  //  * input validation (name length, pairing_code shape).
-  //
-  // Item 10 (Stage 8): server-issued one-time code registry ab hai
-  // (`POST /pairing-codes`, TTL 5 min default, single-use). Purana
-  // `PAIRING_SECRET` fallback bana hua hai jab tak `REQUIRE_PAIRING_CODE`
-  // on na ho.
+  // Legacy instant-pair endpoint is intentionally retired; owner approval is mandatory.
   router.post('/devices/pair', (Request request) async {
-    final parsed = await readJsonObject(request);
-    if (!parsed.isOk) return parsed.error!;
-    final body = parsed.body!;
-
-    // Item 10: server-issued code (valid) PAIRING_SECRET ki jagah le leta
-    // hai. `REQUIRE_PAIRING_CODE=true` par code ke bina pairing band.
-    // Code yahan sirf *check* hota hai; consume neeche, validation ke
-    // baad aur device banane se theek pehle hota hai (galat input par
-    // code waste na ho).
-    final suppliedCode = body['pairing_code'];
-    final codeOk = suppliedCode is String &&
-        PairingCodeRegistry.looksLikeCode(suppliedCode) &&
-        state.pairingCodes.isValid(suppliedCode);
-    if (requireCode() && !codeOk) {
-      return unauthorized('Valid, unexpired server pairing code chahiye');
-    }
-    final requiredSecret = environment['PAIRING_SECRET'];
-    if (!codeOk && requiredSecret != null && requiredSecret.isNotEmpty) {
-      final given = body['pairing_secret'];
-      if (given is! String || !constantTimeEquals(given, requiredSecret)) {
-        return unauthorized('Pairing secret galat ya missing hai');
-      }
-    }
-
-    if (state.devices.length >= _maxDevices()) {
-      return ApiError.forbidden(
-          'Server par maximum devices (${_maxDevices()}) paired hain');
-    }
-
-    final rawName = body['device_name'];
-    if (rawName != null && rawName is! String) {
-      return ApiError.invalidRequest('"device_name" ek string honi chahiye');
-    }
-    final deviceName = ((rawName as String?) ?? 'Unnamed Device').trim();
-    if (deviceName.isEmpty || deviceName.length > 100) {
-      return ApiError.invalidRequest(
-          '"device_name" 1 se 100 characters ke beech honi chahiye');
-    }
-
-    final pairingCode = body['pairing_code'];
-    if (pairingCode != null &&
-        (pairingCode is! String || pairingCode.length > 64)) {
-      return ApiError.invalidRequest(
-          '"pairing_code" ek string (max 64 chars) honi chahiye');
-    }
-
-    // P1-02 — platform batana required hai (AI Tool Registry isi se
-    // device-specific capability filtering karta hai).
-    final platform = body['platform'];
-    const validPlatforms = {'android', 'windows', 'linux'};
-    if (platform is! String || !validPlatforms.contains(platform)) {
-      return ApiError.invalidRequest(
-          '"platform" required hai aur in mein se ek honi chahiye: '
-          '${validPlatforms.join(", ")}');
-    }
-
-    // Item 10: code ab consume karo (sync — check aur consume ke beech
-    // koi await nahi, is liye ek code se do device nahi ban sakte).
-    if (codeOk && !state.pairingCodes.consume(suppliedCode as String)) {
-      return unauthorized('Pairing code ab valid nahi raha');
-    }
-
-    // Item 19: 128-bit id + exists-check (collision par purana device
-    // kabhi overwrite nahi hota).
-    var id = Device.generateId();
-    while (state.devices.containsKey(id)) {
-      id = Device.generateId();
-    }
-    final token = Device.generateToken();
-    final now = DateTime.now().toUtc();
-    state.devices[id] = Device(
-      id: id,
-      name: deviceName,
-      bearerTokenHash: hashSecretUtil(token),
-      platform: platform,
-      pairedAt: now,
-      lastSeenAt: now,
-    );
-    await state.persist();
-    // Plaintext token sirf isi response mein, ek hi baar (P0-06).
-    return Response.ok(
-      jsonEncode({'device_id': id, 'bearer_token': token}),
-      headers: {'content-type': 'application/json'},
-    );
+    return Response(410, body: jsonEncode({'error':'owner_approval_required','message':'Use POST /devices/register and wait for website approval.'}), headers: {'content-type':'application/json'});
   });
 
   // DELETE /devices/{id} — Item 21: device khud ko unpair karta hai.

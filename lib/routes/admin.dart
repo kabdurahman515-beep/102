@@ -22,7 +22,6 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../models/device.dart';
 import '../models/errors.dart';
-import '../models/task.dart';
 import '../storage/app_state.dart';
 import '../util/crypto_utils.dart';
 import '../util/http_utils.dart';
@@ -150,13 +149,67 @@ Router adminRoutes(AppState state, Handler commandHandler) {
       return ApiError.notFound('Admin API band hai (ADMIN_TOKEN set nahi)');
     }
     if (!isAdminRequest(request)) {
-      return ApiError.unauthorized('Admin token required (Authorization: Bearer <ADMIN_TOKEN>)');
+      return unauthorized('Admin token required (Authorization: Bearer <ADMIN_TOKEN>)');
     }
     return null;
   }
 
   Response json(Object body) => Response.ok(jsonEncode(body),
       headers: {'content-type': 'application/json', 'cache-control': 'no-store'});
+
+  // Owner approval queue and duration-controlled credentials.
+  router.get('/admin/pending-devices', (Request request) async {
+    final denied = guard(request); if (denied != null) return denied;
+    final now = DateTime.now().toUtc();
+    var changed = false;
+    for (final m in state.pendingRegistrations.values) {
+      if (m['status'] == 'pending' && DateTime.parse(m['request_expires_at'] as String).isBefore(now)) { m['status'] = 'expired'; changed = true; }
+    }
+    if (changed) await state.persist();
+    final items = state.pendingRegistrations.values.where((m) => m['status'] == 'pending').map((m) => {
+      'id':m['id'], 'name':m['name'], 'platform':m['platform'], 'created_at':m['created_at'], 'request_expires_at':m['request_expires_at']
+    }).toList();
+    return json({'pending_devices':items});
+  });
+
+  router.post('/admin/pending-devices/<id>/approve', (Request request, String id) async {
+    final denied = guard(request); if (denied != null) return denied;
+    if (state.devices.length >= 500) return ApiError.forbidden('Maximum device limit reached');
+    final item = state.pendingRegistrations[id]; if (item == null || item['status'] != 'pending') return ApiError.notFound('Pending registration not found');
+    if (DateTime.parse(item['request_expires_at'] as String).isBefore(DateTime.now().toUtc())) { item['status'] = 'expired'; await state.persist(); return ApiError.notFound('Registration request expired'); }
+    final parsed = await readJsonObject(request); if (!parsed.isOk) return parsed.error!;
+    final body = parsed.body!; final unit = body['unit']; final amount = body['amount'];
+    DateTime? expiry;
+    if (unit == 'permanent') { expiry = null; }
+    else {
+      if (amount is! int || amount < 1 || amount > 3650 || !{'hours','days','months'}.contains(unit)) return ApiError.invalidRequest('Choose a valid duration: hours/days/months/permanent');
+      final now = DateTime.now().toUtc();
+      final duration = unit == 'hours' ? Duration(hours: amount) : unit == 'days' ? Duration(days: amount) : Duration(days: amount * 30);
+      expiry = now.add(duration);
+    }
+    item['status'] = 'approved'; item['approved_at'] = DateTime.now().toUtc().toIso8601String();
+    item['access_expires_at'] = expiry?.toIso8601String();
+    await state.persist();
+    return json({'approved':true,'expires_at':expiry?.toIso8601String(),'duration':unit == 'permanent' ? 'permanent' : '$amount $unit'});
+  });
+
+  router.post('/admin/pending-devices/<id>/reject', (Request request, String id) async {
+    final denied = guard(request); if (denied != null) return denied;
+    final item = state.pendingRegistrations[id]; if (item == null || item['status'] != 'pending') return ApiError.notFound('Pending registration not found');
+    item['status'] = 'rejected'; item['rejected_at'] = DateTime.now().toUtc().toIso8601String(); await state.persist();
+    return json({'rejected':true});
+  });
+
+  router.post('/admin/devices/<id>/revoke', (Request request, String id) async {
+    final denied = guard(request); if (denied != null) return denied;
+    if (state.devices[id] == null) return ApiError.notFound('Device not found');
+    await state.removeDevice(id);
+    for (final registration in state.pendingRegistrations.values) {
+      if (registration['device_id'] == id) registration['status'] = 'revoked';
+    }
+    await state.persist();
+    return json({'revoked':true});
+  });
 
   // GET /admin/devices — saare paired devices + live connection + active tasks.
   router.get('/admin/devices', (Request request) {
@@ -171,6 +224,7 @@ Router adminRoutes(AppState state, Handler commandHandler) {
         'id': d.id,
         'name': d.name,
         'platform': d.platform,
+        'expires_at': d.expiresAt?.toIso8601String(),
         'connected': state.deviceConnections.containsKey(d.id),
         'active_task_count': active.length,
         'active_tasks': active.take(20).map((t) => t.toJson()).toList(),
