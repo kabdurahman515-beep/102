@@ -20,6 +20,7 @@ import 'package:shelf_router/shelf_router.dart';
 import '../auth/device_auth.dart';
 import '../models/api_key.dart';
 import '../models/device.dart';
+import '../models/task.dart';
 import '../models/errors.dart';
 import '../storage/app_state.dart';
 import '../util/http_utils.dart';
