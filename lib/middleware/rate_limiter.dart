@@ -156,13 +156,15 @@ Middleware rateLimitMiddleware({bool trustProxy = false}) {
       final identity = identityFor(request, trustProxy: trustProxy);
 
       final pairingPath = request.requestedUri.path;
-      final isPairingRequest =
-          (request.method == 'POST' &&
-              (pairingPath == '/devices/pair' ||
-                  pairingPath == '/pairing-codes' ||
-                  pairingPath == '/devices/register')) ||
-          (request.method == 'GET' &&
-              pairingPath.startsWith('/devices/registration/'));
+      // Sirf registration/legacy pairing ke POST attempts ko strict hourly
+      // bucket mein rakhein. Registration status polling GET har 5 sec hoti
+      // hai; use is bucket mein rakhne se legitimate app 10 polls ke baad
+      // 429 ho jati thi. Polling general per-identity limiter (120/min) se
+      // ab bhi protected hai.
+      final isPairingRequest = request.method == 'POST' &&
+          (pairingPath == '/devices/pair' ||
+              pairingPath == '/pairing-codes' ||
+              pairingPath == '/devices/register');
       if (isPairingRequest) {
         final pairRetry = pairLimiter.checkAndIncrement(identity);
         if (pairRetry != null) {
