@@ -39,17 +39,28 @@ Router deviceRoutes(AppState state, {Map<String, String>? env}) {
     if (device is Device) {
       issuedBy = 'device:${device.id}';
     } else {
-      final adminSecret = environment['ADMIN_SECRET'] ?? '';
       final header = request.headers['authorization'] ?? '';
-      if (adminSecret.length >= _minAdminSecretLength &&
-          header.startsWith('Bearer ') &&
-          constantTimeEquals(header.substring('Bearer '.length), adminSecret)) {
+      final bearer = header.toLowerCase().startsWith('bearer ')
+          ? header.substring('Bearer '.length).trim()
+          : '';
+      // The website authenticates with ADMIN_TOKEN. Accept it here as the
+      // owner credential for issuing short-lived pairing codes. Keep the
+      // legacy ADMIN_SECRET bootstrap path for existing deployments.
+      final adminToken = environment['ADMIN_TOKEN'] ?? '';
+      final adminSecret = environment['ADMIN_SECRET'] ?? '';
+      final tokenMatches = adminToken.length >= 32 &&
+          bearer.isNotEmpty &&
+          constantTimeEquals(bearer, adminToken);
+      final secretMatches = adminSecret.length >= _minAdminSecretLength &&
+          bearer.isNotEmpty &&
+          constantTimeEquals(bearer, adminSecret);
+      if (tokenMatches || secretMatches) {
         issuedBy = 'admin';
       }
     }
     if (issuedBy == null) {
       return unauthorized(
-          'Paired device token ya ADMIN_SECRET (min $_minAdminSecretLength chars) chahiye');
+          'Paired device token ya owner admin credential (ADMIN_TOKEN/ADMIN_SECRET) chahiye');
     }
     final issued = state.pairingCodes.issue(issuedBy: issuedBy);
     if (issued == null) {
