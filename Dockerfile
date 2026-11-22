@@ -1,17 +1,11 @@
-# Railway build: extract the approved backend source archive before building.
+# Railway build: use the reviewed, version-controlled source files in this repository.
+# Do not overlay the older approval ZIP: it contains stale Dart files and
+# can silently replace newer fixes during the image build.
 ARG DART_VERSION=stable
 FROM dart:${DART_VERSION}
 WORKDIR /app
 
-# The repository stores the approved backend as a ZIP. Extract it over the
-# repository snapshot so Railway builds the uploaded source, not stale root files.
 COPY . .
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends unzip \
-    && unzip -o Universal_Device_Agent_Backend_Approval_BUILD_FIXED.zip -d /app \
-    && rm -f Universal_Device_Agent_Backend_Approval_BUILD_FIXED.zip \
-    && rm -rf /var/lib/apt/lists/*
-
 RUN dart pub get
 RUN mkdir -p /data
 ENV DATA_DIR=/data
