@@ -21,6 +21,7 @@ import '../auth/device_auth.dart';
 import '../models/api_key.dart';
 import '../models/device.dart';
 import '../models/errors.dart';
+import '../models/task.dart';
 import '../storage/app_state.dart';
 import '../util/http_utils.dart';
 import '../validation/schema_validator.dart' show maxUploadRequestBodyBytes;
