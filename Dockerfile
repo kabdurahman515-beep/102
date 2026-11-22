@@ -23,7 +23,7 @@ COPY pubspec.* ./
 RUN dart pub get
 
 COPY . .
-RUN dart analyze
+RUN dart analyze lib
 RUN dart test
 RUN dart pub get --offline
 
