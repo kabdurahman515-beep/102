@@ -1,1 +1,1 @@
-Trigger one-time extraction of the approved backend source archive.
+Trigger approved backend source extraction (retry after sync fix).
