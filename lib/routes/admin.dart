@@ -21,6 +21,7 @@ import 'package:shelf_web_socket/shelf_web_socket.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../models/device.dart';
+import '../models/task.dart';
 import '../models/errors.dart';
 import '../storage/app_state.dart';
 import '../util/crypto_utils.dart';
@@ -149,7 +150,7 @@ Router adminRoutes(AppState state, Handler commandHandler) {
       return ApiError.notFound('Admin API band hai (ADMIN_TOKEN set nahi)');
     }
     if (!isAdminRequest(request)) {
-      return unauthorized('Admin token required (Authorization: Bearer <ADMIN_TOKEN>)');
+      return ApiError.unauthorized('Admin token required (Authorization: Bearer <ADMIN_TOKEN>)');
     }
     return null;
   }
