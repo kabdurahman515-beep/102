@@ -3,5 +3,4 @@
 build/
 .git/
 README.md
-test/
 TEST_*.md
