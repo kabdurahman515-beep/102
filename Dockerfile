@@ -23,6 +23,7 @@ COPY pubspec.* ./
 RUN dart pub get
 
 COPY . .
+RUN dart analyze
 RUN dart pub get --offline
 
 # Data directory jahan Persistence apni state.json save karegi. Railway
