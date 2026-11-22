@@ -357,6 +357,9 @@ Router connectorRoutes(AppState state) {
       return unauthorized('Device token ya `data_transfer` scope wali API key required');
     }
     final provider = connectorProviderByName(connectorName);
+    if (provider == null) {
+      return ApiError.notFound('Unknown connector "$connectorName".');
+    }
     final String? accessToken;
     try {
       accessToken = await state.getValidAccessToken(deviceId, connectorName, provider);
