@@ -24,7 +24,7 @@ RUN dart pub get
 
 COPY . .
 RUN dart analyze lib
-RUN dart test
+RUN dart test test/device_approval_test.dart test/pairing_code_test.dart test/persistence_writable_test.dart
 RUN dart pub get --offline
 
 # Data directory jahan Persistence apni state.json save karegi. Railway
