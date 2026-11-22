@@ -93,6 +93,17 @@ void main() {
       expect(s.pairingCodes.isValid(body['pairing_code'] as String), isTrue);
     });
 
+    test('ADMIN_TOKEN from website dashboard can issue a code', () async {
+      const adminToken = 'admin-token-for-dashboard-123456789';
+      final s = AppState();
+      final h = _handler(s, {'ADMIN_TOKEN': adminToken});
+      final res = await _post(h, '/pairing-codes', {}, bearer: adminToken);
+      expect(res.statusCode, 200);
+      final body = _j(await res.readAsString());
+      expect(body['single_use'], true);
+      expect(s.pairingCodes.isValid(body['pairing_code'] as String), isTrue);
+    });
+
     test('paired device token can issue a code', () async {
       final s = AppState();
       s.devices['d1'] = Device(
